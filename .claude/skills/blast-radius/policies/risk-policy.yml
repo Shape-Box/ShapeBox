@@ -1,0 +1,66 @@
+# Risk policy read by the blast-radius skill.
+# Agents must never edit this file. Only a human changes it (see .github/CODEOWNERS).
+
+# Paths that raise the risk. Glob patterns, matched against changed files.
+protected_paths:
+  critical:   # any match forces the score to at least `critical_floor` (level `high`)
+    - ".github/**"
+    - ".factory/**"
+    - ".claude/agents/**"
+    - "**/migrations/**"
+    - "**/*.sql"
+    - "**/auth/**"
+    - "**/payment*/**"
+    - "**/secrets*"
+    - "**/.env*"
+  sensitive:  # each matching changed file adds `scoring.signals.sensitive_path` points
+    - "package.json"
+    - "package-lock.json"
+    - "pnpm-lock.yaml"
+    - "yarn.lock"
+    - "requirements*.txt"
+    - "pyproject.toml"
+    - "go.mod"
+    - "Cargo.toml"
+    - "Dockerfile*"
+    - "**/config/**"
+    - ".claude/skills/**"
+
+# Diff size thresholds, counted as added plus removed lines.
+# Crossing a medium threshold adds `size_medium` points, a high threshold adds
+# `size_high` points instead (never both). Either lines or files may trigger it.
+size:
+  medium_lines: 150
+  high_lines: 500
+  medium_files: 10
+  high_files: 25
+
+# Points per signal. Signals marked "judged" are decided by the skill from the
+# diff and the surrounding code, and only count when there is clear evidence.
+scoring:
+  signals:
+    size_medium: 1
+    size_high: 3
+    sensitive_path: 1         # per changed file matching `sensitive`
+    many_dependents: 2        # judged: touched code is used from 10+ places
+    untested_code: 2          # judged: changed code has no tests covering it
+    irreversible: 3           # judged: migration, public API break or data deletion
+    security_medium: 2        # judged: touches security-relevant behaviour
+    compliance_review: 1      # judged: needs a compliance or legal look
+
+# Converts total points to a 0-100 score. Linear between anchors, rounded to a
+# whole number. Points above the last anchor give the last score.
+score_map:
+  - [0, 0]
+  - [2, 34]
+  - [5, 67]
+  - [10, 100]
+
+# Lowest score a critical path match can give.
+critical_floor: 67
+
+# Score bands (inclusive).
+levels:
+  low: [0, 33]
+  medium: [34, 66]
+  high: [67, 100]
