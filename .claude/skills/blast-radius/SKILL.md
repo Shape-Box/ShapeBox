@@ -19,7 +19,7 @@ All rules live in `policies/risk-policy.yml`. Read it fresh every run. Never edi
    - `sensitive_path`: once per changed file that matches `sensitive`.
    - `size_medium` or `size_high`: compare total lines and file count to `size`. Add only the highest one reached.
    - Judged signals (`many_dependents`, `untested_code`, `irreversible`, `security_medium`, `compliance_review`): look at the code and tests around the change. Add the points only with clear evidence, and name the evidence. If unsure, do not add.
-5. **Convert** the total points to a score with `score_map` (linear between anchors, rounded to a whole number, capped at the last anchor).
+5. **Convert** the total points to a score by looking the total up in `score_by_points`. Do not calculate or interpolate. A total above the highest key uses the highest key's score.
 6. **Apply the critical floor.** If any critical path matched, the score is at least `critical_floor`.
 7. **Find the level** from `levels`.
 

@@ -48,15 +48,30 @@ scoring:
     security_medium: 2        # judged: touches security-relevant behaviour
     compliance_review: 1      # judged: needs a compliance or legal look
 
-# Converts total points to a 0-100 score. Linear between anchors, rounded to a
-# whole number. Points above the last anchor give the last score.
-score_map:
-  - [0, 0]
-  - [2, 34]
-  - [5, 67]
-  - [10, 100]
+# HOW TO TURN POINTS INTO THE SCORE
+# 1. Add up all signal points (the "total points" below). Count each point once.
+# 2. Look up the total in `score_by_points`. This table is the only source of
+#    the score. Do not interpolate or calculate.
+# 3. A total above the highest key uses the highest key's score (100).
+# 4. If any `critical` path matched, the score is the higher of the table score
+#    and `critical_floor`.
+# 5. Read the level from `levels` using the final score.
+#
+# total points -> score (level)
+score_by_points:
+  0: 0      # low
+  1: 17     # low
+  2: 34     # medium
+  3: 45     # medium
+  4: 56     # medium
+  5: 67     # high
+  6: 74     # high
+  7: 80     # high
+  8: 87     # high
+  9: 93     # high
+  10: 100   # high
 
-# Lowest score a critical path match can give.
+# Lowest final score when a critical path matched (equals the start of `high`).
 critical_floor: 67
 
 # Score bands (inclusive).
