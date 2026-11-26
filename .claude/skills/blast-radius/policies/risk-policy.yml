@@ -35,43 +35,27 @@ size:
   medium_files: 10
   high_files: 25
 
-# Points per signal. Signals marked "judged" are decided by the skill from the
-# diff and the surrounding code, and only count when there is clear evidence.
-scoring:
-  signals:
-    size_medium: 1
-    size_high: 3
-    sensitive_path: 1         # per changed file matching `sensitive`
-    many_dependents: 2        # judged: touched code is used from 10+ places
-    untested_code: 2          # judged: changed code has no tests covering it
-    irreversible: 3           # judged: migration, public API break or data deletion
-    security_medium: 2        # judged: touches security-relevant behaviour
-    compliance_review: 1      # judged: needs a compliance or legal look
-
-# HOW TO TURN POINTS INTO THE SCORE
-# 1. Add up all signal points (the "total points" below). Count each point once.
-# 2. Look up the total in `score_by_points`. This table is the only source of
-#    the score. Do not interpolate or calculate.
-# 3. A total above the highest key uses the highest key's score (100).
-# 4. If any `critical` path matched, the score is the higher of the table score
-#    and `critical_floor`.
-# 5. Read the level from `levels` using the final score.
+# HOW THE SCORE IS CALCULATED
+# Every signal below is worth points on the final 0-100 scale.
+#   score = sum of all signal points, capped at 100
+# If any `critical` path matched, the score is at least `critical_floor`.
+# The level is read from `levels` using the final score.
 #
-# total points -> score (level)
-score_by_points:
-  0: 0      # low
-  1: 17     # low
-  2: 34     # medium
-  3: 45     # medium
-  4: 56     # medium
-  5: 67     # high
-  6: 74     # high
-  7: 80     # high
-  8: 87     # high
-  9: 93     # high
-  10: 100   # high
+# Signals marked "judged" are decided by the skill from the diff and the
+# surrounding code, and only count when there is clear evidence.
+scoring:
+  max_score: 100
+  signals:
+    size_medium: 15           # diff reaches a medium threshold in `size`
+    size_high: 40             # diff reaches a high threshold in `size` (instead of size_medium)
+    sensitive_path: 10        # per changed file matching `sensitive`
+    many_dependents: 25       # judged: touched code is used from 10+ places
+    untested_code: 25         # judged: changed code has no tests covering it
+    irreversible: 40          # judged: migration, public API break or data deletion
+    security_medium: 30       # judged: touches security-relevant behaviour
+    compliance_review: 10     # judged: needs a compliance or legal look
 
-# Lowest final score when a critical path matched (equals the start of `high`).
+# Lowest score when a critical path matched (equals the start of `high`).
 critical_floor: 67
 
 # Score bands (inclusive).

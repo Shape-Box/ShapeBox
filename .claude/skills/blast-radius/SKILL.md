@@ -15,11 +15,11 @@ All rules live in `policies/risk-policy.yml`. Read it fresh every run. Never edi
 1. **Pick the change.** Use the argument if given: a PR number (`gh api repos/{owner}/{repo}/pulls/{n}/files --paginate`), a branch or a base ref. Otherwise compare the current branch to `main` with `git diff --numstat origin/main...HEAD`. If there is no diff, report score 0 and say so.
 2. **Collect facts.** Changed file paths and added plus removed lines per file.
 3. **Match paths.** Match each changed path against `protected_paths.critical` and `protected_paths.sensitive` (glob patterns). Note every match.
-4. **Add points** from `scoring.signals`:
+4. **Add points** from `scoring.signals` (each value is already on the 0-100 scale):
    - `sensitive_path`: once per changed file that matches `sensitive`.
    - `size_medium` or `size_high`: compare total lines and file count to `size`. Add only the highest one reached.
    - Judged signals (`many_dependents`, `untested_code`, `irreversible`, `security_medium`, `compliance_review`): look at the code and tests around the change. Add the points only with clear evidence, and name the evidence. If unsure, do not add.
-5. **Convert** the total points to a score by looking the total up in `score_by_points`. Do not calculate or interpolate. A total above the highest key uses the highest key's score.
+5. **Sum** the points. That sum is the score, capped at `scoring.max_score`. There is no conversion step.
 6. **Apply the critical floor.** If any critical path matched, the score is at least `critical_floor`.
 7. **Find the level** from `levels`.
 
@@ -28,20 +28,19 @@ All rules live in `policies/risk-policy.yml`. Read it fresh every run. Never edi
 Keep it short, in this shape:
 
 ```text
-Blast radius: 45/100 (medium)
-Points: 3
-- size_medium +1 (200 lines)
-- sensitive_path +1 package.json
-- sensitive_path +1 package-lock.json
+Blast radius: 35/100 (medium)
+- size_medium +15 (200 lines)
+- sensitive_path +10 package.json
+- sensitive_path +10 package-lock.json
 Critical paths: none
 ```
 
-Always list every signal that added points, with its reason, so the points add up to the total. State the critical paths matched, or "none".
+Always list every signal that added points, with its reason, so the points add up to the score (before the critical floor). State the critical paths matched, or "none".
 
 ## Examples
 
-- One-line change to `README.md`: 0 points, `0/100 (low)`.
-- 200 changed lines across `package.json`, `package-lock.json` and one source file: size_medium 1 + two sensitive files 2 = 3 points, `45/100 (medium)`.
-- A 5-line edit to `.github/workflows/ci.yml`: 0 points, but a critical match raises it to `67/100 (high)`.
+- One-line change to `README.md`: no signals, `0/100 (low)`.
+- 200 changed lines across `package.json`, `package-lock.json` and one source file: size_medium 15 + two sensitive files 20 = `35/100 (medium)`.
+- A 5-line edit to `.github/workflows/ci.yml`: no signals, but a critical match raises it to `67/100 (high)`.
 
 These examples assume the shipped policy values. If the policy changes, recompute rather than trusting them.
