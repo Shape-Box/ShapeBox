@@ -51,7 +51,7 @@ scoring:
     sensitive_path: 10        # per changed file matching `sensitive`
     many_dependents: 25       # judged: touched code is used from 10+ places
     untested_code: 25         # judged: changed code has no tests covering it
-    irreversible: 40          # judged: migration, public API break or data deletion
+    irreversible: 67          # judged: migration, public API break or data deletion. Always `high` on its own.
     security_medium: 30       # judged: touches security-relevant behaviour
     compliance_review: 10     # judged: needs a compliance or legal look
 
