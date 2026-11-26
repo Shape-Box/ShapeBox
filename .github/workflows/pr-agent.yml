@@ -1,0 +1,183 @@
+# PR agent: runs the review, security, compliance and blast-radius checks on every pull
+# request, posts the results as one comment, and squash-merges the pull request when every
+# check is clean and the blast radius is low. See docs/pr-agent.md.
+#
+# Trust model:
+# - `pull_request_target` runs this file, the decision script and the skills from the base
+#   branch, so a pull request cannot change the rules it is judged by.
+# - The pull request's code is checked out only to be read. Its `.claude/` folders,
+#   `.mcp.json` and `CLAUDE.md` files are left out of the checkout, and the agent loads
+#   user settings only, so none of its hooks, skills or MCP servers run.
+# - The agent job has a read-only token. Only the decide job, which runs no agent, can
+#   comment, label and merge.
+# - Pull requests from forks are skipped: they never get the API key or a write token.
+
+name: PR agent
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.332"
+
+jobs:
+  analyze:
+    name: Run checks
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Check out the trusted agent files from the base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: |
+            .claude/skills
+            .github/pr-agent
+
+      - name: Check out the pull request for reading
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !.claude/
+            !.mcp.json
+            !CLAUDE.md
+            !CLAUDE.local.md
+
+      - name: Point origin/HEAD at the base branch
+        working-directory: pr
+        run: |
+          git switch --create "pr-${PR_NUMBER}"
+          git remote set-head origin "${BASE_REF}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the agent CLI
+        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Run the checks
+        working-directory: pr
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.PR_AGENT_MODEL || 'claude-opus-5-5' }}
+          MAX_BUDGET_USD: ${{ vars.PR_AGENT_MAX_BUDGET_USD || '10' }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::error::The ANTHROPIC_API_KEY repository secret is not set."
+            exit 1
+          fi
+          export TRUSTED="${GITHUB_WORKSPACE}/trusted"
+          out="${RUNNER_TEMP}/pr-agent"
+          mkdir -p "${out}"
+          python3 -c '
+          import os, sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          for key in ("REPO", "PR_NUMBER", "HEAD_SHA", "BASE_REF"):
+              text = text.replace("{{%s}}" % key, os.environ[key])
+          text = text.replace("{{SKILLS_DIR}}", os.environ["TRUSTED"] + "/.claude/skills")
+          sys.stdout.write(text)
+          ' "${TRUSTED}/.github/pr-agent/prompt.md" > "${out}/prompt.md"
+
+          status=0
+          claude --print "$(cat "${out}/prompt.md")" \
+            --model "${MODEL}" \
+            --max-budget-usd "${MAX_BUDGET_USD}" \
+            --output-format json \
+            --json-schema "$(cat "${TRUSTED}/.github/pr-agent/result.schema.json")" \
+            --setting-sources user \
+            --strict-mcp-config \
+            --add-dir "${TRUSTED}" \
+            --allowedTools "Read" "Grep" "Glob" "Skill" "Agent" \
+              "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git fetch:*)" \
+              "Bash(git status:*)" "Bash(git rev-parse:*)" "Bash(git merge-base:*)" \
+              "Bash(git branch:*)" "Bash(git ls-files:*)" "Bash(git grep:*)" \
+              "Bash(git blame:*)" "Bash(gh api:*)" "Bash(gh pr diff:*)" "Bash(gh pr view:*)" \
+              "Bash(npm view:*)" "Bash(ls:*)" \
+            --disallowedTools "Write" "Edit" "NotebookEdit" "WebFetch" "WebSearch" \
+            > "${out}/output.json" || status=$?
+
+          if ! jq -e '.is_error == false and .structured_output != null' "${out}/output.json" > /dev/null 2>&1; then
+            echo "::error::The agent did not return a result (exit code ${status})."
+            jq '{subtype, is_error, result}' "${out}/output.json" 2>/dev/null || head -c 4000 "${out}/output.json"
+            exit 1
+          fi
+          jq '.structured_output' "${out}/output.json" > "${out}/result.json"
+          jq -r '"Agent cost: $\(.total_cost_usd) in \(.num_turns) turns"' "${out}/output.json"
+
+      - name: Keep the result for the decide job
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-agent-result
+          path: ${{ runner.temp }}/pr-agent/result.json
+          retention-days: 7
+
+  decide:
+    name: Comment and merge
+    needs: analyze
+    if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check out the trusted decision files from the base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/pr-agent
+            .claude/skills/blast-radius/policies
+
+      - name: Fetch the agent's result
+        if: needs.analyze.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-agent-result
+          path: ${{ runner.temp }}/pr-agent
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pyyaml==6.0.2
+
+      - name: Comment, label and merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+          RESULT_FILE: ${{ runner.temp }}/pr-agent/result.json
+          RISK_POLICY: .claude/skills/blast-radius/policies/risk-policy.yml
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python .github/pr-agent/decide.py
