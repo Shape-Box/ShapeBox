@@ -1,3 +1,4 @@
-# Only a human changes the risk policy used by the blast-radius skill.
+# Only a human changes the policies used by the blast-radius and compliance skills.
 # TODO: replace @OWNER with the GitHub user or team that approves policy changes.
 /.claude/skills/blast-radius/policies/ @OWNER
+/.claude/skills/compliance/policies/ @OWNER

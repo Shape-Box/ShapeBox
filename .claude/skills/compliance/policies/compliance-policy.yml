@@ -1,0 +1,114 @@
+# Compliance policy read by the compliance skill.
+# Agents must never edit this file. Only a human changes it (see .github/CODEOWNERS).
+# The values below are a starting point. A human must confirm them, especially
+# `licenses.allowed`, before the skill's results are relied on.
+
+# --- Personal data -------------------------------------------------------------
+# Data about a person. Code (not documentation) that collects, stores, logs or
+# sends any of these is checked against `required_handling`.
+personal_data:
+  categories:
+    - name: full name
+    - name: email address
+    - name: phone number
+    - name: postal address
+    - name: IP address
+    - name: date of birth
+    - name: government ID (passport, national ID, tax or social security number)
+    - name: payment card or bank account number
+    - name: precise location (GPS coordinates)
+    - name: health data
+    - name: device or advertising ID linked to a person
+  # Each rule fails the check when the change handles personal data and the rule
+  # is not met in the changed code or the code around it.
+  required_handling:
+    - id: no-logs
+      rule: Personal data is not written to logs, error messages or analytics events in plain form.
+    - id: consent
+      rule: Personal data is only collected after the person has agreed, or there is a stated legal reason in the code or its docs.
+    - id: retention
+      rule: Stored personal data has a stated retention period or a cleanup job.
+    - id: deletion
+      rule: Stored personal data can be deleted when the person asks (a delete path exists for the new storage).
+    - id: minimal
+      rule: Only the fields the feature needs are collected or sent to third parties.
+
+# --- Dependency licenses -------------------------------------------------------
+# SPDX identifiers (https://spdx.org/licenses/). A dependency passes when its
+# license is in `allowed`. For "A OR B" one allowed option is enough; for
+# "A AND B" every part must be allowed.
+licenses:
+  allowed:
+    - MIT
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - ISC
+    - 0BSD
+    - Zlib
+    - Unlicense
+    - CC0-1.0
+    - Python-2.0
+    - BlueOak-1.0.0
+  # What a license that cannot be found (reported as "unknown") does to the check.
+  # fail: the license check fails until a human confirms the license.
+  # pass: it is listed as "unknown" but the check can still pass.
+  unknown: fail
+  # Dependency manifests whose changes are checked.
+  manifests:
+    - "package.json"
+    - "requirements*.txt"
+    - "pyproject.toml"
+    - "Pipfile"
+    - "go.mod"
+    - "Cargo.toml"
+    - "Gemfile"
+    - "composer.json"
+    - "pom.xml"
+    - "build.gradle*"
+
+# --- Secrets and sensitive files ----------------------------------------------
+secrets:
+  # Files that must never be committed. Glob patterns, matched against added or
+  # changed paths. `allowed_files` are exceptions (templates without real values).
+  never_commit:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/*.p12"
+    - "**/*.pfx"
+    - "**/*.keystore"
+    - "**/*.jks"
+    - "**/id_rsa*"
+    - "**/id_ecdsa*"
+    - "**/id_ed25519*"
+    - "**/credentials*.json"
+    - "**/service-account*.json"
+    - "**/.npmrc"
+    - "**/.pypirc"
+    - "**/.netrc"
+  allowed_files:
+    - "**/.env.example"
+    - "**/.env.sample"
+    - "**/.env.template"
+  # Text patterns in added lines that look like real secrets. Regular expressions.
+  patterns:
+    - id: private-key
+      regex: "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    - id: aws-access-key
+      regex: "\\b(AKIA|ASIA)[0-9A-Z]{16}\\b"
+    - id: github-token
+      regex: "\\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\\b|\\bgithub_pat_[A-Za-z0-9_]{60,}\\b"
+    - id: slack-token
+      regex: "\\bxox[abprs]-[A-Za-z0-9-]{10,}\\b"
+    - id: stripe-key
+      regex: "\\b[sr]k_live_[A-Za-z0-9]{20,}\\b"
+    - id: google-api-key
+      regex: "\\bAIza[0-9A-Za-z_-]{35}\\b"
+    - id: anthropic-or-openai-key
+      regex: "\\bsk-(ant-)?[A-Za-z0-9_-]{20,}\\b"
+    - id: hard-coded-credential
+      # A secret-like name assigned a literal value. Placeholders such as
+      # "changeme", "<token>", "xxx" or values read from the environment do not count.
+      regex: "(?i)(api[_-]?key|secret|token|passw(or)?d|client[_-]?secret)\\s*[:=]\\s*['\"][^'\"\\s]{8,}['\"]"
