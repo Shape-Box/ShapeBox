@@ -79,15 +79,25 @@ the auto-merge, with a note to rename the pull request. The agent itself never c
 - The agent job gets a read-only GitHub token and may run only reading commands (`git diff`,
   `git log`, `gh api`, `npm view` and similar). It cannot edit files or use the web tools.
 - Only the **Comment and merge** job can write. It runs no agent.
-- Pull requests from forks are skipped. They never get the API key or a write token.
+- Pull requests from forks are skipped. They never get the sign-in secret or a write token.
 
 ## Setup
 
-1. Add the repository secret `ANTHROPIC_API_KEY` (Settings → Secrets and variables → Actions).
+1. Add one sign-in secret (Settings → Secrets and variables → Actions → Repository secrets):
+   - **Subscription (Pro, Max, Ultra, Team or Enterprise):** on your own computer, run
+     `claude setup-token`, approve access in the browser, and save the printed token as
+     `CLAUDE_CODE_OAUTH_TOKEN`. Runs then use your subscription's usage limits instead of
+     API billing. The token lasts one year and belongs to the person who created it, so
+     create a new one before it expires or when that person leaves.
+   - **API key:** save a key from the Claude Console as `ANTHROPIC_API_KEY`. Runs are billed
+     per token. Prefer this for a secret shared across many repositories.
+
+   If both are set, the subscription token is used.
 2. Allow squash merging (Settings → General → Pull Requests).
 3. Optional repository variables:
    - `PR_AGENT_MODEL`: the model to use. Default `claude-opus-5-5`.
-   - `PR_AGENT_MAX_BUDGET_USD`: the most one run may spend. Default `10`.
+   - `PR_AGENT_MAX_BUDGET_USD`: the most one run may spend, measured at API prices even when
+     the subscription token is used. Default `10`.
 4. If `main` has a ruleset or branch protection that requires an approving review, the bot's
    merge is refused. The comment then says GitHub refused the merge and a person merges it.
    To let low-risk pull requests merge on their own, allow GitHub Actions to bypass that
