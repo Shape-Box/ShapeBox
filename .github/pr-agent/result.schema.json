@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "summary", "failed_conditions", "checks"],
+  "properties": {
+    "decision": { "type": "string", "enum": ["merge", "human_review"] },
+    "summary": { "type": "string" },
+    "failed_conditions": { "type": "array", "items": { "type": "string" } },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review", "security", "compliance", "blast_radius"],
+      "properties": {
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verdict", "ticket", "report"],
+          "properties": {
+            "verdict": { "type": "string", "enum": ["ready", "needs changes", "blocked"] },
+            "ticket": { "type": ["string", "null"] },
+            "report": { "type": "string" }
+          }
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ran", "finding_count", "report"],
+          "properties": {
+            "ran": { "type": "boolean" },
+            "finding_count": { "type": "integer", "minimum": 0 },
+            "report": { "type": "string" }
+          }
+        },
+        "compliance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["personal_data", "licenses", "secrets", "report"],
+          "properties": {
+            "personal_data": { "type": "string", "enum": ["pass", "fail"] },
+            "licenses": { "type": "string", "enum": ["pass", "fail"] },
+            "secrets": { "type": "string", "enum": ["pass", "fail"] },
+            "report": { "type": "string" }
+          }
+        },
+        "blast_radius": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["score", "level", "critical_paths", "report"],
+          "properties": {
+            "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "level": { "type": "string", "enum": ["low", "medium", "high"] },
+            "critical_paths": { "type": "array", "items": { "type": "string" } },
+            "report": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
