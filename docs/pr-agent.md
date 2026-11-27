@@ -96,10 +96,11 @@ the auto-merge, with a note to rename the pull request. The agents never create 
 
 - The workflow uses `pull_request_target`, so it always runs from the base branch. A pull
   request cannot change the workflow or the schema it is judged by.
-- The pull request's code is checked out only to be read. Its `.claude/` folders, `.mcp.json`
-  and `CLAUDE.md` files are not written to disk. The base branch's `.claude/` (agents, skills,
-  policies) is put in their place, so no hook, agent, skill or MCP server from the pull
-  request runs. Git still sees the pull request's changes to those files, so they are reviewed.
+- The pull request's code is checked out only to be read. Before Claude starts, the action
+  puts `.claude/`, `.mcp.json`, `CLAUDE.md` and similar files back from the base branch, so
+  no hook, agent, skill or MCP server from the pull request runs. The agents are also read
+  straight from the base commit and passed to the CLI, so they are registered the same way
+  on every run. Git still sees the pull request's changes to those files, so they are reviewed.
 - Changes to the agents or the workflow only take effect after a person merges them, and
   `.github/**` and `.claude/agents/**` are critical paths, so they always need a person.
 - The agent job gets a read-only GitHub token and may run only reading commands (`git diff`,
