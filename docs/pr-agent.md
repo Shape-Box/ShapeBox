@@ -77,6 +77,10 @@ updates it on every run. It shows:
 - the hard limits, each with ✅ or ❌;
 - the reports of review, security, compliance and blast radius.
 
+After an automatic merge the workflow closes the tickets named with `Closes`, `Fixes` or
+`Resolves` in the pull request description, because GitHub did not close them for a merge
+made through the API. A number that is a pull request is skipped.
+
 When the pull request is not merged it gets the label `needs-human-review`. The label is
 removed when it is merged automatically. If the agent fails, runs out of budget or returns no
 complete result, nothing is merged and the workflow run fails.

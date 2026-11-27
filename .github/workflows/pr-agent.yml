@@ -253,6 +253,17 @@ jobs:
             fi
           fi
 
+          # Close the tickets the pull request names with Closes / Fixes / Resolves. GitHub did not
+          # close them for a merge made through the API. A number that is a pull request is skipped.
+          if [ "${merged}" = true ]; then
+            for n in $(jq -r '.body // ""' <<< "${pr_json}" \
+                | grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+' | grep -oE '[0-9]+$' | sort -u); do
+              if [ -z "$(gh api "repos/${REPO}/issues/${n}" --jq '.pull_request // empty' 2>/dev/null)" ]; then
+                gh api -X PATCH "repos/${REPO}/issues/${n}" -f state=closed -f state_reason=completed > /dev/null 2>&1 || true
+              fi
+            done
+          fi
+
           # 4. Comment and label.
           jq -rn --argjson r "${RESULT}" --argjson limits "${limits}" --argjson merged "${merged}" \
             --arg merge_error "${merge_error}" --arg marker "${marker}" --arg sha "${HEAD_SHA:0:7}" --arg run "${RUN_URL}" '
