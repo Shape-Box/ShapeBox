@@ -11,7 +11,10 @@ Run the `security` skill and hand back its result.
 
 1. The pull request head is checked out as the current branch, and `origin/HEAD` points at
    the base branch. Do not check out anything else.
-2. Invoke the `security` skill with no arguments and follow its steps exactly.
+2. Invoke the `security` skill with no arguments and follow its steps exactly. If the Skill
+   tool says the `security` skill is unknown, invoke the built-in `security-review` skill with
+   no arguments instead and pass its findings on unchanged. The `security` skill only wraps
+   that built-in review, so the result is the same.
 3. Count the findings the built-in review reported. Pass them on unchanged.
 4. If the built-in review is not available or does not finish, `ran` is `false`.
 
