@@ -89,6 +89,19 @@ jobs:
           git remote set-head origin "${BASE_REF}"
           echo "schema=$(git show "${BASE_SHA}:.github/pr-agent/result.schema.json" | jq -c .)" >> "${GITHUB_OUTPUT}"
 
+          # Pass the agents to the CLI explicitly, built from the base branch's files, so they
+          # are registered however the action loads settings.
+          for f in .claude/agents/pr-*.md; do
+            name=$(basename "${f}" .md)
+            description=$(awk '/^description:/ { sub(/^description: */, ""); print; exit }' "${f}")
+            tools=$(awk '/^tools:/ { sub(/^tools: */, ""); print; exit }' "${f}")
+            prompt=$(awk '/^---$/ { n++; next } n >= 2' "${f}")
+            jq -n --arg n "${name}" --arg d "${description}" --arg t "${tools}" --arg p "${prompt}" \
+              '{($n): ({description: $d, prompt: $p} + (if $t == "" then {} else {tools: ($t | split(", "))} end))}'
+          done | jq -s 'add' > "${RUNNER_TEMP}/pr-agents.json"
+          echo "Registered agents: $(jq -r 'keys | join(", ")' "${RUNNER_TEMP}/pr-agents.json")"
+          echo "agents_file=${RUNNER_TEMP}/pr-agents.json" >> "${GITHUB_OUTPUT}"
+
       - name: Run the PR agent
         id: agent
         uses: anthropics/claude-code-action@v1
@@ -101,6 +114,7 @@ jobs:
             Check pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
             Head commit: ${{ github.event.pull_request.head.sha }}. Base branch: ${{ github.event.pull_request.base.ref }}.
           claude_args: >-
+            --agents ${{ steps.prepare.outputs.agents_file }}
             --agent pr-agent
             --model ${{ steps.prepare.outputs.model }}
             --max-budget-usd ${{ steps.prepare.outputs.budget }}
