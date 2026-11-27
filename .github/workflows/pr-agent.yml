@@ -136,6 +136,19 @@ jobs:
                            | .input.subagent_type? // empty] | unique | join(",")' "${EXECUTION_FILE}" || true)
           fi
           echo "Subagents started: ${list:-none}"
+          # Short summary for debugging: how each subagent was started and how it ended.
+          if [ -n "${EXECUTION_FILE:-}" ] && [ -f "${EXECUTION_FILE}" ]; then
+            jq -r '
+              [.. | objects | select(.type? == "tool_result")] as $res
+              | ([.. | objects | select(.type? == "tool_use" and (.name == "Agent" or .name == "Task") and .input.subagent_type?)] | unique_by(.id)[] as $c
+                 | "- \($c.input.subagent_type // "?") background=\($c.input.run_in_background // false): "
+                   + ([$res[] | select(.tool_use_id == $c.id)
+                       | (.content | if type == "array" then map(.text? // "") | join(" ") else tostring end)
+                       | gsub("\n"; " ") | .[0:200]] | first // "no result")),
+                ([.. | objects | select(.type? == "result") | .permission_denials[]?
+                   | "- denied: \(.tool_name) \(.tool_input | tostring | .[0:150])"][])' \
+              "${EXECUTION_FILE}" || true
+          fi
           echo "subagents=${list}" >> "${GITHUB_OUTPUT}"
 
   finish:
