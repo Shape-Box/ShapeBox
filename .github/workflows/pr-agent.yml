@@ -6,9 +6,10 @@
 # Trust model:
 # - `pull_request_target` runs this file from the base branch, so a pull request cannot
 #   change the rules it is judged by.
-# - The pull request is checked out only to be read. Its `.claude/` folders, `.mcp.json` and
-#   `CLAUDE.md` files are left out, and the base branch's `.claude/` (agents, skills,
-#   policies) is put in their place, so no hook, agent or skill from the pull request runs.
+# - The pull request is checked out only to be read. Before Claude starts, the action puts
+#   `.claude/`, `.mcp.json` and `CLAUDE.md` back from the base branch ("PR head is untrusted"),
+#   so no hook, agent or skill from the pull request runs. The agents are also read straight
+#   from the base commit.
 # - The agent job has a read-only token. Only the finish job, which runs no agent, can
 #   comment, label and merge.
 # - Pull requests from forks are skipped: they never get the sign-in secret or a write token.
@@ -48,15 +49,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /*
-            !.claude/
-            !.mcp.json
-            !CLAUDE.md
-            !CLAUDE.local.md
 
-      - name: Put the base branch's agent configuration in place
+      - name: Prepare the run
         id: prepare
         env:
           MODEL_VAR: ${{ vars.PR_AGENT_MODEL }}
@@ -76,26 +70,19 @@ jobs:
           fi
           echo "model=${model}" >> "${GITHUB_OUTPUT}"
           echo "budget=${budget}" >> "${GITHUB_OUTPUT}"
-          # Keep git treating the left-out paths as unchanged, so `git status` stays clean and
-          # diffs still show the pull request's own changes to them.
-          git config sparse.expectFilesOutsideOfPatterns true
-          git archive "${BASE_SHA}" .claude | tar -x
-          if git cat-file -e "${BASE_SHA}:CLAUDE.md" 2>/dev/null; then
-            git show "${BASE_SHA}:CLAUDE.md" > CLAUDE.md
-          fi
-          printf '.claude/\nCLAUDE.md\n' >> .git/info/exclude
           # The security review checks the pending changes of the current branch against origin/HEAD.
           git switch --create "pr-${PR_NUMBER}"
           git remote set-head origin "${BASE_REF}"
           echo "schema=$(git show "${BASE_SHA}:.github/pr-agent/result.schema.json" | jq -c .)" >> "${GITHUB_OUTPUT}"
 
-          # Pass the agents to the CLI explicitly, built from the base branch's files, so they
-          # are registered however the action loads settings.
-          for f in .claude/agents/pr-*.md; do
-            name=$(basename "${f}" .md)
-            description=$(awk '/^description:/ { sub(/^description: */, ""); print; exit }' "${f}")
-            tools=$(awk '/^tools:/ { sub(/^tools: */, ""); print; exit }' "${f}")
-            prompt=$(awk '/^---$/ { n++; next } n >= 2' "${f}")
+          # Pass the agents to the CLI explicitly. They are read from the base commit with
+          # `git show`, never from the working tree, which holds the pull request's files.
+          for path in $(git ls-tree --name-only "${BASE_SHA}" .claude/agents/ | grep '/pr-[a-z-]*\.md$'); do
+            name=$(basename "${path}" .md)
+            file=$(git show "${BASE_SHA}:${path}")
+            description=$(awk '/^description:/ { sub(/^description: */, ""); print; exit }' <<< "${file}")
+            tools=$(awk '/^tools:/ { sub(/^tools: */, ""); print; exit }' <<< "${file}")
+            prompt=$(awk '/^---$/ { n++; next } n >= 2' <<< "${file}")
             jq -n --arg n "${name}" --arg d "${description}" --arg t "${tools}" --arg p "${prompt}" \
               '{($n): ({description: $d, prompt: $p} + (if $t == "" then {} else {tools: ($t | split(", "))} end))}'
           done | jq -s 'add' > "${RUNNER_TEMP}/pr-agents.json"
