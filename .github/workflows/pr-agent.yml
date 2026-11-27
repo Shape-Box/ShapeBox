@@ -37,6 +37,7 @@ jobs:
       issues: read
     outputs:
       result: ${{ steps.agent.outputs.structured_output }}
+      subagents: ${{ steps.count.outputs.subagents }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -108,6 +109,21 @@ jobs:
             --allowedTools "Read,Grep,Glob,Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git fetch:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git branch:*),Bash(git ls-files:*),Bash(git grep:*),Bash(git blame:*),Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(npm view:*),Bash(ls:*)"
             --disallowedTools "Write,Edit,NotebookEdit,WebFetch,WebSearch"
 
+      - name: Record which subagents the coordinator started
+        id: count
+        if: ${{ !cancelled() }}
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          list=''
+          if [ -n "${EXECUTION_FILE:-}" ] && [ -f "${EXECUTION_FILE}" ]; then
+            list=$(jq -r '[.. | objects | select(.type? == "tool_use" and (.name == "Agent" or .name == "Task"))
+                           | .input.subagent_type? // empty] | unique | join(",")' "${EXECUTION_FILE}" || true)
+          fi
+          echo "Subagents started: ${list:-none}"
+          echo "subagents=${list}" >> "${GITHUB_OUTPUT}"
+
   finish:
     name: Comment and merge
     needs: check
@@ -134,6 +150,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CHECK_JOB: ${{ needs.check.result }}
           RESULT: ${{ needs.check.outputs.result }}
+          SUBAGENTS: ${{ needs.check.outputs.subagents }}
           POLICY: .claude/skills/blast-radius/policies/risk-policy.yml
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -187,7 +204,11 @@ jobs:
             ($patterns | map(glob_re)) as $res
             | $files | split("\n")[] | select(length > 0)
             | select(. as $f | any($res[]; . as $re | $f | test($re)))')
-          limits=$(jq -n --argjson pr "${pr_json}" --arg sha "${HEAD_SHA}" --arg critical "${critical}" --arg tool_ref "${tool_ref}" '[
+          limits=$(jq -n --argjson pr "${pr_json}" --arg sha "${HEAD_SHA}" --arg critical "${critical}" --arg tool_ref "${tool_ref}" --arg subagents "${SUBAGENTS:-}" '[
+            {name: "All four subagents ran",
+             ok: (($subagents | split(",")) as $ran
+                  | ["pr-review", "pr-security", "pr-compliance", "pr-blast-radius"] | all(. as $n | $ran | index($n) != null)),
+             detail: (if $subagents == "" then "none were recorded" else ($subagents | gsub(","; ", ")) end)},
             {name: "No critical path changed", ok: ($critical == ""),
              detail: (if $critical == "" then "none" else ($critical | split("\n") | map("`" + . + "`") | join(", ")) end)},
             {name: "Pull request is open, not a draft, and unchanged since the checks",
@@ -204,7 +225,7 @@ jobs:
           if jq -e '.decision == "merge"' <<< "${RESULT}" > /dev/null && jq -e 'all(.ok)' <<< "${limits}" > /dev/null; then
             title="$(jq -r .title <<< "${pr_json}") (#${PR})"
             message=$(gh api "repos/${REPO}/pulls/${PR}/commits?per_page=100" --paginate \
-              --jq '.[].commit.message | split("\n")[0]' | grep -viE "${tool_ref}" | sed 's/^/* /' || true)
+              --jq '.[].commit.message | split("\n")[0]' | grep -viE "${tool_ref}" | grep -vE '^Merge ' | sed 's/^/* /' || true)
             if out=$(jq -n --arg t "${title}" --arg m "${message}" --arg sha "${HEAD_SHA}" \
                   '{merge_method: "squash", sha: $sha, commit_title: $t, commit_message: $m}' \
                 | gh api -X PUT "repos/${REPO}/pulls/${PR}/merge" --input - 2>&1); then

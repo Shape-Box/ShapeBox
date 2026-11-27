@@ -59,6 +59,8 @@ The workflow then merges only if the coordinator said `merge` **and** every hard
 The hard limits are checked in the workflow, not by an agent, so text in a pull request
 cannot talk its way past them:
 
+- all four subagents were started. The workflow reads this from the execution record, so a
+  coordinator that runs the checks itself, or skips one, is never merged automatically;
 - no changed file matches a `critical` path of the risk policy, for example `.github/**`,
   `.claude/agents/**` or `**/migrations/**`;
 - the pull request is open, not a draft, and has no commits newer than the checked one;
