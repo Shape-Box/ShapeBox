@@ -105,6 +105,10 @@ jobs:
       - name: Run the PR agent
         id: agent
         uses: anthropics/claude-code-action@v1
+        env:
+          # The coordinator must wait for its subagents. Without this, they can be started in
+          # the background and the coordinator answers before any of them has reported.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           github_token: ${{ github.token }}
           # The subscription token is used when set, otherwise the API key.
