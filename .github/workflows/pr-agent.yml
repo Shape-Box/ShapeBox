@@ -1,14 +1,15 @@
-# PR agent: runs the review, security, compliance and blast-radius checks on every pull
-# request, posts the results as one comment, and squash-merges the pull request when every
-# check is clean and the blast radius is low. See docs/pr-agent.md.
+# PR agent: a coordinator agent starts four subagents (review, security, compliance, blast
+# radius), judges their results and decides whether the pull request can be merged without a
+# human. A short bash step then writes the comment and squash-merges only if the coordinator
+# said "merge" AND the hard limits hold. See docs/pr-agent.md.
 #
 # Trust model:
-# - `pull_request_target` runs this file, the decision script and the skills from the base
-#   branch, so a pull request cannot change the rules it is judged by.
-# - The pull request's code is checked out only to be read. Its `.claude/` folders,
-#   `.mcp.json` and `CLAUDE.md` files are left out of the checkout, and the agent loads
-#   user settings only, so none of its hooks, skills or MCP servers run.
-# - The agent job has a read-only token. Only the decide job, which runs no agent, can
+# - `pull_request_target` runs this file from the base branch, so a pull request cannot
+#   change the rules it is judged by.
+# - The pull request is checked out only to be read. Its `.claude/` folders, `.mcp.json` and
+#   `CLAUDE.md` files are left out, and the base branch's `.claude/` (agents, skills,
+#   policies) is put in their place, so no hook, agent or skill from the pull request runs.
+# - The agent job has a read-only token. Only the finish job, which runs no agent, can
 #   comment, label and merge.
 # - Pull requests from forks are skipped: they never get the sign-in secret or a write token.
 
@@ -24,11 +25,8 @@ concurrency:
 
 permissions: {}
 
-env:
-  CLAUDE_CODE_VERSION: "2.1.332"
-
 jobs:
-  analyze:
+  check:
     name: Run checks
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -37,26 +35,17 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+    outputs:
+      result: ${{ steps.agent.outputs.structured_output }}
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
-      - name: Check out the trusted agent files from the base branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: trusted
-          persist-credentials: false
-          sparse-checkout: |
-            .claude/skills
-            .github/pr-agent
-
       - name: Check out the pull request for reading
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: pr
           fetch-depth: 0
           sparse-checkout-cone-mode: false
           sparse-checkout: |
@@ -66,90 +55,46 @@ jobs:
             !CLAUDE.md
             !CLAUDE.local.md
 
-      - name: Point origin/HEAD at the base branch
-        working-directory: pr
-        run: |
-          git switch --create "pr-${PR_NUMBER}"
-          git remote set-head origin "${BASE_REF}"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install the agent CLI
-        run: npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-
-      - name: Run the checks
-        working-directory: pr
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ vars.PR_AGENT_MODEL || 'claude-opus-5-5' }}
-          MAX_BUDGET_USD: ${{ vars.PR_AGENT_MAX_BUDGET_USD || '10' }}
-          REPO: ${{ github.repository }}
+      - name: Put the base branch's agent configuration in place
+        id: prepare
         run: |
           set -euo pipefail
-          # Prefer the subscription token. The CLI would use an API key first if both were
-          # set, so drop the one not chosen.
-          if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-            unset ANTHROPIC_API_KEY
-            echo "Signing in with the subscription token."
-          elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-            unset CLAUDE_CODE_OAUTH_TOKEN
-            echo "Signing in with the API key."
-          else
-            echo "::error::Set the CLAUDE_CODE_OAUTH_TOKEN or the ANTHROPIC_API_KEY repository secret."
-            exit 1
+          # Keep git treating the left-out paths as unchanged, so `git status` stays clean and
+          # diffs still show the pull request's own changes to them.
+          git config sparse.expectFilesOutsideOfPatterns true
+          git archive "${BASE_SHA}" .claude | tar -x
+          if git cat-file -e "${BASE_SHA}:CLAUDE.md" 2>/dev/null; then
+            git show "${BASE_SHA}:CLAUDE.md" > CLAUDE.md
           fi
-          export TRUSTED="${GITHUB_WORKSPACE}/trusted"
-          out="${RUNNER_TEMP}/pr-agent"
-          mkdir -p "${out}"
-          python3 -c '
-          import os, sys
-          text = open(sys.argv[1], encoding="utf-8").read()
-          for key in ("REPO", "PR_NUMBER", "HEAD_SHA", "BASE_REF"):
-              text = text.replace("{{%s}}" % key, os.environ[key])
-          text = text.replace("{{SKILLS_DIR}}", os.environ["TRUSTED"] + "/.claude/skills")
-          sys.stdout.write(text)
-          ' "${TRUSTED}/.github/pr-agent/prompt.md" > "${out}/prompt.md"
+          printf '.claude/\nCLAUDE.md\n' >> .git/info/exclude
+          # The security review checks the pending changes of the current branch against origin/HEAD.
+          git switch --create "pr-${PR_NUMBER}"
+          git remote set-head origin "${BASE_REF}"
+          echo "schema=$(git show "${BASE_SHA}:.github/pr-agent/result.schema.json" | jq -c .)" >> "${GITHUB_OUTPUT}"
 
-          status=0
-          claude --print "$(cat "${out}/prompt.md")" \
-            --model "${MODEL}" \
-            --max-budget-usd "${MAX_BUDGET_USD}" \
-            --output-format json \
-            --json-schema "$(cat "${TRUSTED}/.github/pr-agent/result.schema.json")" \
-            --setting-sources user \
-            --strict-mcp-config \
-            --add-dir "${TRUSTED}" \
-            --allowedTools "Read" "Grep" "Glob" "Skill" "Agent" \
-              "Bash(git diff:*)" "Bash(git log:*)" "Bash(git show:*)" "Bash(git fetch:*)" \
-              "Bash(git status:*)" "Bash(git rev-parse:*)" "Bash(git merge-base:*)" \
-              "Bash(git branch:*)" "Bash(git ls-files:*)" "Bash(git grep:*)" \
-              "Bash(git blame:*)" "Bash(gh api:*)" "Bash(gh pr diff:*)" "Bash(gh pr view:*)" \
-              "Bash(npm view:*)" "Bash(ls:*)" \
-            --disallowedTools "Write" "Edit" "NotebookEdit" "WebFetch" "WebSearch" \
-            > "${out}/output.json" || status=$?
-
-          if ! jq -e '.is_error == false and .structured_output != null' "${out}/output.json" > /dev/null 2>&1; then
-            echo "::error::The agent did not return a result (exit code ${status})."
-            jq '{subtype, is_error, result}' "${out}/output.json" 2>/dev/null || head -c 4000 "${out}/output.json"
-            exit 1
-          fi
-          jq '.structured_output' "${out}/output.json" > "${out}/result.json"
-          jq -r '"Agent cost: $\(.total_cost_usd) in \(.num_turns) turns"' "${out}/output.json"
-
-      - name: Keep the result for the decide job
-        uses: actions/upload-artifact@v4
+      - name: Run the PR agent
+        id: agent
+        uses: anthropics/claude-code-action@v1
         with:
-          name: pr-agent-result
-          path: ${{ runner.temp }}/pr-agent/result.json
-          retention-days: 7
+          github_token: ${{ github.token }}
+          # The subscription token is used when set, otherwise the API key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          prompt: |
+            Check pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Head commit: ${{ github.event.pull_request.head.sha }}. Base branch: ${{ github.event.pull_request.base.ref }}.
+          claude_args: >-
+            --agent pr-agent
+            --model ${{ vars.PR_AGENT_MODEL || 'claude-opus-5-5' }}
+            --max-budget-usd ${{ vars.PR_AGENT_MAX_BUDGET_USD || '10' }}
+            --permission-mode default
+            --json-schema '${{ steps.prepare.outputs.schema }}'
+            --allowedTools "Read,Grep,Glob,Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git fetch:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git branch:*),Bash(git ls-files:*),Bash(git grep:*),Bash(git blame:*),Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(npm view:*),Bash(ls:*)"
+            --disallowedTools "Write,Edit,NotebookEdit,WebFetch,WebSearch"
 
-  decide:
+  finish:
     name: Comment and merge
-    needs: analyze
+    needs: check
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -158,35 +103,123 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - name: Check out the trusted decision files from the base branch
+      - name: Check out the risk policy from the base branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-          sparse-checkout: |
-            .github/pr-agent
-            .claude/skills/blast-radius/policies
-
-      - name: Fetch the agent's result
-        if: needs.analyze.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          name: pr-agent-result
-          path: ${{ runner.temp }}/pr-agent
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - run: pip install pyyaml==6.0.2
+          sparse-checkout: .claude/skills/blast-radius/policies
 
       - name: Comment, label and merge
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          ANALYZE_RESULT: ${{ needs.analyze.result }}
-          RESULT_FILE: ${{ runner.temp }}/pr-agent/result.json
-          RISK_POLICY: .claude/skills/blast-radius/policies/risk-policy.yml
+          CHECK_JOB: ${{ needs.check.result }}
+          RESULT: ${{ needs.check.outputs.result }}
+          POLICY: .claude/skills/blast-radius/policies/risk-policy.yml
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python .github/pr-agent/decide.py
+        run: |
+          set -euo pipefail
+          marker='<!-- pr-agent-report -->'
+          label='needs-human-review'
+          # Lines naming an AI tool never go into the merge commit.
+          tool_ref='claude|anthropic'
+
+          post_comment() {  # body on stdin; updates this workflow's comment if there is one
+            local body id
+            body=$(cat)
+            id=$(gh api "repos/${REPO}/issues/${PR}/comments?per_page=100" --paginate \
+              --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id" | head -n1)
+            if [ -n "${id}" ]; then
+              jq -n --arg b "${body}" '{body: $b}' | gh api -X PATCH "repos/${REPO}/issues/comments/${id}" --input - > /dev/null
+            else
+              jq -n --arg b "${body}" '{body: $b}' | gh api -X POST "repos/${REPO}/issues/${PR}/comments" --input - > /dev/null
+            fi
+          }
+          set_label() {  # add | remove
+            if [ "$1" = add ]; then
+              gh api -X POST "repos/${REPO}/issues/${PR}/labels" -f "labels[]=${label}" > /dev/null
+            else
+              gh api -X DELETE "repos/${REPO}/issues/${PR}/labels/${label}" > /dev/null 2>&1 || true
+            fi
+          }
+
+          # 1. The agent must have finished with a complete result.
+          valid='(.decision | IN("merge", "human_review"))
+            and (.summary | type == "string") and (.failed_conditions | type == "array")
+            and ([.checks.review, .checks.security, .checks.compliance, .checks.blast_radius]
+                 | all(type == "object" and (.report | type == "string")))'
+          if [ "${CHECK_JOB}" != success ] || ! jq -e "${valid}" <<< "${RESULT:-null}" > /dev/null 2>&1; then
+            printf '%s\n## PR agent checks\n\n**Result: the checks could not finish.** The pull request was not merged and needs human review.\n\nThe agent job ended with `%s` and returned no complete result.\n\nCommit `%s` · [workflow run](%s)\n' \
+              "${marker}" "${CHECK_JOB}" "${HEAD_SHA:0:7}" "${RUN_URL}" | post_comment
+            set_label add
+            echo "::error::The checks could not finish."
+            exit 1
+          fi
+
+          # 2. Hard limits, checked here whatever the agent decided.
+          pr_json=$(gh api "repos/${REPO}/pulls/${PR}")
+          files=$(gh api "repos/${REPO}/pulls/${PR}/files?per_page=100" --paginate \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          critical=$(jq -rn --argjson patterns "$(yq -o=json '.protected_paths.critical' "${POLICY}")" --arg files "${files}" '
+            def glob_re: gsub("(?<c>[.+()^$|{}\\[\\]\\\\])"; "\\\(.c)")
+              | gsub("\\*\\*/"; "\u0001") | gsub("\\*\\*"; "\u0002")
+              | gsub("\\*"; "[^/]*") | gsub("\\?"; "[^/]")
+              | gsub("\u0001"; "(.*/)?") | gsub("\u0002"; ".*") | "^" + . + "$";
+            ($patterns | map(glob_re)) as $res
+            | $files | split("\n")[] | select(length > 0)
+            | select(. as $f | any($res[]; . as $re | $f | test($re)))')
+          limits=$(jq -n --argjson pr "${pr_json}" --arg sha "${HEAD_SHA}" --arg critical "${critical}" --arg tool_ref "${tool_ref}" '[
+            {name: "No critical path changed", ok: ($critical == ""),
+             detail: (if $critical == "" then "none" else ($critical | split("\n") | map("`" + . + "`") | join(", ")) end)},
+            {name: "Pull request is open, not a draft, and unchanged since the checks",
+             ok: ($pr.state == "open" and ($pr.draft | not) and $pr.head.sha == $sha),
+             detail: (if $pr.state != "open" then "state is \($pr.state)" elif $pr.draft then "draft"
+                      elif $pr.head.sha != $sha then "new commits arrived; the next run checks them" else "ok" end)},
+            {name: "Title can be used in the merge message", ok: ($pr.title | test($tool_ref; "i") | not),
+             detail: (if $pr.title | test($tool_ref; "i") then "the title names an AI tool; rename the pull request" else "ok" end)}
+          ]')
+
+          # 3. Merge only if the coordinator said so and every hard limit holds.
+          merged=false
+          merge_error=''
+          if jq -e '.decision == "merge"' <<< "${RESULT}" > /dev/null && jq -e 'all(.ok)' <<< "${limits}" > /dev/null; then
+            title="$(jq -r .title <<< "${pr_json}") (#${PR})"
+            message=$(gh api "repos/${REPO}/pulls/${PR}/commits?per_page=100" --paginate \
+              --jq '.[].commit.message | split("\n")[0]' | grep -viE "${tool_ref}" | sed 's/^/* /' || true)
+            if out=$(jq -n --arg t "${title}" --arg m "${message}" --arg sha "${HEAD_SHA}" \
+                  '{merge_method: "squash", sha: $sha, commit_title: $t, commit_message: $m}' \
+                | gh api -X PUT "repos/${REPO}/pulls/${PR}/merge" --input - 2>&1); then
+              merged=true
+            else
+              merge_error=$(tr '\n`' "  " <<< "${out}" | cut -c1-300)
+            fi
+          fi
+
+          # 4. Comment and label.
+          jq -rn --argjson r "${RESULT}" --argjson limits "${limits}" --argjson merged "${merged}" \
+            --arg merge_error "${merge_error}" --arg marker "${marker}" --arg sha "${HEAD_SHA:0:7}" --arg run "${RUN_URL}" '
+            def quiet: gsub("@"; "@​");
+            def fenced: (if length > 12000 then .[:12000] + "\n… (shortened)" else . end) as $t
+              | ([[$t | scan("`+") | length] | max // 0, 2] | max + 1) as $n
+              | ("`" * $n) as $f | $f + "text\n" + $t + "\n" + $f;
+            ($limits | map(select(.ok | not) | .name)) as $failed_limits
+            | (if $merged then "**Result: squash-merged automatically.** Every check is clean and the blast radius is low, so no human review is needed."
+               elif $merge_error != "" then "**Result: needs human review.** Every condition passed, but GitHub refused the merge: `\($merge_error)`"
+               else "**Result: needs human review.** Not met: \(($r.failed_conditions + $failed_limits) | join("; ") | quiet)."
+               end) as $headline
+            | [ $marker, "## PR agent checks", "", $headline, "",
+                "Commit `\($sha)` · [workflow run](\($run))", "",
+                "### Judgement", "", "Decision: `\($r.decision)`. \($r.summary | quiet)", "",
+                (if ($r.failed_conditions | length) > 0 then ($r.failed_conditions | map("- ❌ " + quiet) | join("\n")) + "\n" else empty end),
+                "### Hard limits", "",
+                ($limits | map("- " + (if .ok then "✅ " else "❌ " end) + .name + ": " + .detail) | join("\n")),
+                "", "### Review", "", ($r.checks.review.report | fenced),
+                "", "### Security", "", ($r.checks.security.report | fenced),
+                "", "### Compliance", "", ($r.checks.compliance.report | fenced),
+                "", "### Blast radius", "", ($r.checks.blast_radius.report | fenced)
+              ] | join("\n")' | post_comment
+          if [ "${merged}" = true ]; then set_label remove; else set_label add; fi
+          echo "Decision: $(jq -r .decision <<< "${RESULT}"). Merged: ${merged}."
