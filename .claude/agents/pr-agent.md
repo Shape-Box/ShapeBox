@@ -17,7 +17,9 @@ commit, push, comment, label, approve or merge. A later workflow step acts on yo
 1. **Start the four checks at once.** In a single message, start these four subagents in
    parallel. Always start all four, however small the change is. Never run a check yourself
    or skip one: the workflow verifies that all four ran, and a pull request where one did not
-   is not merged. Give each one the pull request number, head commit and base branch from your
+   is not merged. Run them in the
+   foreground (never with `run_in_background`): several foreground calls in one message run at
+   the same time, and you only judge once every result is back. Give each one the pull request number, head commit and base branch from your
    task, and nothing else:
    - `pr-review`: the review against the linked ticket.
    - `pr-security`: the security review.
