@@ -57,8 +57,24 @@ jobs:
 
       - name: Put the base branch's agent configuration in place
         id: prepare
+        env:
+          MODEL_VAR: ${{ vars.PR_AGENT_MODEL }}
+          BUDGET_VAR: ${{ vars.PR_AGENT_MAX_BUDGET_USD }}
         run: |
           set -euo pipefail
+          # A mistyped variable must not break every run: use the default and warn.
+          model="${MODEL_VAR:-claude-opus-5-5}"
+          if ! [[ "${model}" =~ ^claude-(opus|sonnet|haiku|fable|mythos)(-[0-9]+)+$ ]]; then
+            echo "::warning::PR_AGENT_MODEL is '${model}', which is not a model ID (for example claude-sonnet-5-5). Using claude-opus-5-5."
+            model=claude-opus-5-5
+          fi
+          budget="${BUDGET_VAR:-10}"
+          if ! [[ "${budget}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::warning::PR_AGENT_MAX_BUDGET_USD is '${budget}', which is not a number. Using 10."
+            budget=10
+          fi
+          echo "model=${model}" >> "${GITHUB_OUTPUT}"
+          echo "budget=${budget}" >> "${GITHUB_OUTPUT}"
           # Keep git treating the left-out paths as unchanged, so `git status` stays clean and
           # diffs still show the pull request's own changes to them.
           git config sparse.expectFilesOutsideOfPatterns true
@@ -85,8 +101,8 @@ jobs:
             Head commit: ${{ github.event.pull_request.head.sha }}. Base branch: ${{ github.event.pull_request.base.ref }}.
           claude_args: >-
             --agent pr-agent
-            --model ${{ vars.PR_AGENT_MODEL || 'claude-opus-5-5' }}
-            --max-budget-usd ${{ vars.PR_AGENT_MAX_BUDGET_USD || '10' }}
+            --model ${{ steps.prepare.outputs.model }}
+            --max-budget-usd ${{ steps.prepare.outputs.budget }}
             --permission-mode default
             --json-schema '${{ steps.prepare.outputs.schema }}'
             --allowedTools "Read,Grep,Glob,Skill,Agent,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git fetch:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git branch:*),Bash(git ls-files:*),Bash(git grep:*),Bash(git blame:*),Bash(gh api:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(npm view:*),Bash(ls:*)"
