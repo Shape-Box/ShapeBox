@@ -1,4 +1,15 @@
+---
+title: PR agent
+type: component
+status: current
+updated: 2026-11-28
+sources: [.github/workflows/pr-agent.yml, .claude/agents/, .claude/skills/, .github/pr-agent/result.schema.json]
+tags: [ci, automation]
+---
+
 # PR agent
+
+See the [glossary](glossary.md) for the terms used here and the [index](index.md) for all notes.
 
 The PR agent checks every pull request in CI, writes the results into one comment on the
 pull request, and squash-merges the pull request when nothing needs a person's attention.

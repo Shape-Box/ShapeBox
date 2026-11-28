@@ -7,3 +7,6 @@
 
 The PR agent checks every pull request and posts the results as a comment. See
 [docs/pr-agent.md](docs/pr-agent.md).
+
+Documentation lives in [docs/](docs/index.md). Ask Claude to write or update it with the `docs-writer`
+skill, so notes keep the same format.
