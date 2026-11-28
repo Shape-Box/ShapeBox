@@ -1,4 +1,15 @@
+---
+title: Glossary
+type: glossary
+status: current
+updated: 2026-11-28
+sources: [docs/pr-agent.md]
+tags: [glossary, ci]
+---
+
 # Glossary
+
+The terms used by the [PR agent](pr-agent.md). Back to the [index](index.md).
 
 | Term | Meaning |
 | --- | --- |
